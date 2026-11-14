@@ -1,0 +1,60 @@
+---
+# Assisted by OpenCode using model GPT-6.1 Sol
+- name: Gather the interpreter fact after expected role failures clear facts
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - "!min"
+      - python
+
+- name: Read exact LV, mapper, XFS and encryption state
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_facts['python']['executable'] }}"
+      - -c
+      - |
+        from __future__ import print_function
+        import hashlib
+        import json
+        import re
+        import subprocess
+        import sys
+        raw, mapped, mount = sys.argv[1:]
+        def run(*args):
+            return subprocess.check_output(args).decode().strip()
+        metadata = json.loads(run("cryptsetup", "luksDump",
+                                  "--dump-json-metadata", raw))
+        offset = int(metadata["segments"]["0"]["offset"])
+        with open(raw, "rb") as stream:
+            header = hashlib.sha256(stream.read(offset)).hexdigest()
+        with open(mount + "/sentinel", "rb") as stream:
+            sentinel = hashlib.sha256(stream.read()).hexdigest()
+        geometry = re.search(r"data\s*=\s*bsize=(\d+)\s+blocks=(\d+)",
+                             run("xfs_info", mount))
+        print(json.dumps(dict(
+            raw_bytes=int(run("blockdev", "--getsize64", raw)),
+            mapper_bytes=int(run("blockdev", "--getsize64", mapped)),
+            fs_bytes=int(geometry.group(1)) * int(geometry.group(2)),
+            offset=offset, header_sha256=header,
+            metadata_sha256=hashlib.sha256(
+                json.dumps(metadata, sort_keys=True).encode()).hexdigest(),
+            uuid=run("blkid", "-s", "UUID", "-o", "value", mapped),
+            lv_uuid=run("lvs", "--noheadings", "-o", "lv_uuid", raw),
+            sentinel_sha256=sentinel)))
+      - "{{ storage_test_resize_raw }}"
+      - "/dev/mapper/{{ storage_test_resize_mapper }}"
+      - "{{ storage_test_resize_mount }}"
+  register: storage_test_resize_state_command
+  changed_when: false
+  check_mode: false
+
+- name: Store credential-free size snapshot
+  ansible.builtin.set_fact:
+    storage_test_resize_state: "{{ storage_test_resize_state_command.stdout | from_json }}"
+
+- name: Verify the entire mapper and filesystem fill the LV payload
+  ansible.builtin.assert:
+    that:
+      - storage_test_resize_state.mapper_bytes ==
+        storage_test_resize_state.raw_bytes - storage_test_resize_state.offset
+      - storage_test_resize_state.fs_bytes == storage_test_resize_state.mapper_bytes

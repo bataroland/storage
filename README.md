@@ -193,7 +193,10 @@ variables:
 
 - `size`
 
-  The `size` specifies the size of the file system. The format for this is intended to
+  The `size` specifies the size of the volume. For an encrypted volume, this
+  includes the encryption metadata; the usable file system is smaller.
+  Creation and resizing use the same backing-volume size.
+  The format for this is intended to
   be human-readable, e.g.: "10g", "50 GiB". The size of LVM volumes can be specified as a
   percentage of the pool/VG size, eg: "50%" as of v1.4.2.
 
